@@ -65,8 +65,10 @@ left alone.
 
 ## Known limitations
 
-- Title-subset collisions aren't handled (e.g. "Angel" matching "Touched by an
-  Angel").
+- Matching is anchored to the start of the file/folder name (on a word
+  boundary) to avoid title-subset false positives like "Angel" matching
+  "Touched by an Angel". The trade-off: names with something prefixed before
+  the title (e.g. `[ReleaseGroup] Angel - S01E01.mkv`) won't match either.
 - Files missing an `sNNeNN` episode tag (or containing two of them) won't be
   renamed.
 - The log records what changed, but there's no command to replay it as an

@@ -46,6 +46,14 @@ def replace_all(text, dic):
     for i, j in dic.items():
         text = text.replace(i, j)
     return text
+def is_show_match(parsed_show_name,parsed_candidate_name):
+    #Anchors the match to the start of the candidate on a word boundary, eg. parsed_show_name "angel"
+    #matches "angel s01e01" but not "touched by an angel s01e01" -- fixing the title-subset false
+    #positive (Angel vs Touched by an Angel). Trade-off: this also misses names with something
+    #prefixed before the title, eg. "[release group] angel s01e01". An alternative "loose" mode
+    #could just do `parsed_show_name in parsed_candidate_name` to catch those prefixed cases, at
+    #the cost of reintroducing the subset false positives -- could be exposed as a --loose-match flag.
+    return parsed_candidate_name==parsed_show_name or parsed_candidate_name.startswith(parsed_show_name+' ')
 # def get_file_names(directory='.'):
 #     return [x.name for x in os.scandir(directory) if x.is_file() and x.name[-3:] in video_file_types]
 def make_parsed_file_dict(directory='.'):
@@ -61,7 +69,7 @@ def plan_moves(directory,parsed_show_name,series_name_full):
     #Returns [(source_path,destination_path),...] for video files that match the show and would move into series_name_full
     parsed_file_dict=make_parsed_file_dict(directory)
     return [(os.path.join(directory,file),os.path.join(series_name_full,file))
-            for file in parsed_file_dict if parsed_show_name in parsed_file_dict[file]]
+            for file in parsed_file_dict if is_show_match(parsed_show_name,parsed_file_dict[file])]
 def apply_moves(moves):
     for source,destination in moves:
         move(source,destination)
@@ -70,7 +78,7 @@ def plan_renames(directory,parsed_show_name,series_name_full):
     parsed_file_dict=make_parsed_file_dict(directory)
     renames=[]
     for file in parsed_file_dict:
-        if parsed_show_name in parsed_file_dict[file]:
+        if is_show_match(parsed_show_name,parsed_file_dict[file]):
             #Need to handle when the year is after the show name (the convention used when there are multiple shows with the same name)
             try:se_string=re.findall('[s]\d\d[e]\d\d', parsed_file_dict[file])[0]
             except:
@@ -161,14 +169,14 @@ source_directories=[]
 planned_moves+=plan_moves('.',parsed_show_name,series_name_full)
 #search for folders containing episodes. Note that this does not look for folders in folders, just file in folders
 for directory in parsed_directories_dict:
-    if (parsed_show_name in parsed_directories_dict[directory] and
+    if (is_show_match(parsed_show_name,parsed_directories_dict[directory]) and
         name_parser(series_name_full)!=parsed_directories_dict[directory]):
         planned_moves+=plan_moves(directory,parsed_show_name,series_name_full)
         source_directories.append(directory)
 #Look in
 parsed_directories_dict=make_parsed_directory_dict('./'+series_name_full)
 for directory in parsed_directories_dict:
-    if (parsed_show_name in parsed_directories_dict[directory] and
+    if (is_show_match(parsed_show_name,parsed_directories_dict[directory]) and
         parsed_show_name!=parsed_directories_dict[directory]):
         source_directory='./'+series_name_full+'/'+directory
         planned_moves+=plan_moves(source_directory,parsed_show_name,series_name_full)
