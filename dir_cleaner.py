@@ -24,7 +24,6 @@ on_line=not cli_args.offline
 #Open Issues
 # the title subset problem, when one title exists in another (Angel vs Touched by an Angel)
 # What if a file is missing the s##e## string, or if it has two of them?
-# Does it no longer look for files in top level directory?
 
 
 #Remove if uploading to github
@@ -123,8 +122,10 @@ if series_name_full not in make_parsed_directory_dict():os.mkdir(series_name_ful
 
 parsed_directories_dict=make_parsed_directory_dict()
 
-#search for folders containing episodes. Note that this does not look for folders in folders, just file in folders
 planned_moves=[]
+#search for loose episode files sitting directly in the top level (current) directory
+planned_moves+=plan_moves('.',parsed_show_name,series_name_full)
+#search for folders containing episodes. Note that this does not look for folders in folders, just file in folders
 for directory in parsed_directories_dict:
     if (parsed_show_name in parsed_directories_dict[directory] and
         name_parser(series_name_full)!=parsed_directories_dict[directory]):planned_moves+=plan_moves(directory,parsed_show_name,series_name_full)
