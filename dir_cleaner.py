@@ -2,7 +2,7 @@
 import sys
 import os
 import argparse
-from shutil import move
+from shutil import move,copy2
 import tmdbsimple as tmdb
 import re
 from datetime import datetime
@@ -71,8 +71,21 @@ def plan_moves(directory,parsed_show_name,series_name_full):
     return [(os.path.join(directory,file),os.path.join(series_name_full,file))
             for file in parsed_file_dict if is_show_match(parsed_show_name,parsed_file_dict[file])]
 def apply_moves(moves):
+    #Moves each (source,destination) pair; returns [(source,destination,status),...] where status is
+    #'moved' or 'copied' (used when the source couldn't be removed, eg. a video still being seeded)
+    results=[]
     for source,destination in moves:
-        move(source,destination)
+        try:
+            move(source,destination)
+            results.append((source,destination,'moved'))
+        except Exception:
+            #shutil.move copies to the destination before removing the source, so on a "couldn't remove"
+            #failure a full copy is often already there -- only copy again if it's missing, to avoid
+            #redoing a multi-GB transfer
+            if not os.path.exists(destination):copy2(source,destination)
+            print(f'  could not remove "{source}" after copying it (it may still be in use) -- the original was left in place')
+            results.append((source,destination,'copied'))
+    return results
 def plan_renames(directory,parsed_show_name,series_name_full):
     #Returns [(old_name,new_name),...] for video files in directory that would be renamed to the standard format
     parsed_file_dict=make_parsed_file_dict(directory)
@@ -183,8 +196,11 @@ for directory in parsed_directories_dict:
         source_directories.append(source_directory)
 
 print_plan(f'Planned moves into "{series_name_full}"',planned_moves)
-apply_moves(planned_moves)
-log_entries('./'+series_name_full,[f'moved {source} -> {destination}' for source,destination in planned_moves])
+applied_moves=apply_moves(planned_moves)
+log_entries('./'+series_name_full,[
+    f'moved {source} -> {destination}' if status=='moved' else
+    f'copied {source} -> {destination} (original left behind -- could not remove it, possibly still in use)'
+    for source,destination,status in applied_moves])
 
 removed_directories=remove_empty_directories(source_directories)
 if removed_directories:print(f'\nRemoved now-empty source folder(s): {", ".join(removed_directories)}')

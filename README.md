@@ -58,6 +58,12 @@ Every move and rename is appended, with a timestamp, to a hidden
 `.cleaner_log.txt` file inside the destination `Series Name (Year)` folder --
 a running record of what the script has done.
 
+If a file can't be removed from its original location -- for example, a video
+that's still being seeded by a torrent client -- the script falls back to
+copying it to the new location and leaves the original behind, printing (and
+logging) a note so you know there's a leftover copy to clean up once it's no
+longer in use.
+
 After moving videos out, any source folder left containing nothing but junk
 (`.nfo`, `.txt`, `.exe` files, or nothing at all) is removed automatically.
 Folders with anything else left in them (subtitles, nested folders, etc.) are
