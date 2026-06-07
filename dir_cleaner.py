@@ -1,51 +1,24 @@
-#!/usr/bin/env python 
+#!/usr/bin/env python
 import sys
 import os
 import argparse
+import json
 from shutil import move,copy2
 import tmdbsimple as tmdb
 import re
 from datetime import datetime
 
-arg_parser=argparse.ArgumentParser(
-    description='Looks up a TV series, creates a "Series Name (Year)" folder in the current\n'
-                'directory, and moves/renames matching video files (mkv/mp4/avi/m4v) into it\n'
-                'as "Series Name (Year) sXXeXX.ext".\n'
-                '\n'
-                'Run it from the directory containing the show\'s files/folders -- it shows\n'
-                'the planned moves and renames before making them, then (in online mode)\n'
-                'prompts you to pick the matching series from TMDB search results.',
-    epilog='examples:\n'
-           '  python dir_cleaner.py The Office\n'
-           '  python dir_cleaner.py --offline The Office               (prompts for the year)\n'
-           '  python dir_cleaner.py --offline --year 2005 The Office\n'
-           '  python dir_cleaner.py --offline --year "" The Office     (no year in folder/file names)\n'
-           '\n'
-           'Online mode (the default) requires the tvdb_api environment variable to hold a TMDB API key.',
-    formatter_class=argparse.RawDescriptionHelpFormatter)
-arg_parser.add_argument('series_name',nargs='+',help='name of the TV series to search for/organize')
-arg_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
-arg_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
-cli_args=arg_parser.parse_args()
-
-series_name=' '.join(cli_args.series_name)
-on_line=not cli_args.offline
-
-#todo- Clean up code, duh
-#Make OOP, maybe extend to a "library" level, so can autoupdate all?
-
-#Open Issues
-# the title subset problem, when one title exists in another (Angel vs Touched by an Angel)
-# What if a file is missing the s##e## string, or if it has two of them?
-
-
-#Remove if uploading to github
 #Strip any remaining special characters (eg. the "!" in "Reno 911!") since they're typically dropped from downloaded file/folder names
 def name_parser(name):return re.sub(r'[^a-z0-9 ]','',replace_all(name.lower(),{"'":'',".":" ","-":' ',':':'',',':'','_':' '}))
 def replace_all(text, dic):
     for i, j in dic.items():
         text = text.replace(i, j)
     return text
+def full_show_name(name,year):
+    #Builds the canonical "Series Name (Year)" form (or just "Series Name" with no year); colons
+    #are replaced since they're not valid in Windows file/folder names
+    full=f'{name} ({year})' if year else name
+    return full.replace(':','-')
 def is_show_match(parsed_show_name,parsed_candidate_name):
     #Anchors the match to the start of the candidate on a word boundary, eg. parsed_show_name "angel"
     #matches "angel s01e01" but not "touched by an angel s01e01" -- fixing the title-subset false
@@ -54,21 +27,18 @@ def is_show_match(parsed_show_name,parsed_candidate_name):
     #could just do `parsed_show_name in parsed_candidate_name` to catch those prefixed cases, at
     #the cost of reintroducing the subset false positives -- could be exposed as a --loose-match flag.
     return parsed_candidate_name==parsed_show_name or parsed_candidate_name.startswith(parsed_show_name+' ')
-# def get_file_names(directory='.'):
-#     return [x.name for x in os.scandir(directory) if x.is_file() and x.name[-3:] in video_file_types]
 def make_parsed_file_dict(directory='.'):
     #Finds video files in directory, parses the file names
     video_file_types=['mkv','mp4','avi','m4v']
     files=[x.name for x in os.scandir(directory) if x.is_file() and x.name[-3:] in video_file_types]
     return { x:name_parser(x) for x in files}
 def make_parsed_directory_dict(directory='.'):
-
     directories=[x.name for x in os.scandir(directory) if x.is_dir()]
     return { x:name_parser(x) for x in directories}
-def plan_moves(directory,parsed_show_name,series_name_full):
-    #Returns [(source_path,destination_path),...] for video files that match the show and would move into series_name_full
+def plan_moves(directory,parsed_show_name,destination_directory):
+    #Returns [(source_path,destination_path),...] for video files that match the show and would move into destination_directory
     parsed_file_dict=make_parsed_file_dict(directory)
-    return [(os.path.join(directory,file),os.path.join(series_name_full,file))
+    return [(os.path.join(directory,file),os.path.join(destination_directory,file))
             for file in parsed_file_dict if is_show_match(parsed_show_name,parsed_file_dict[file])]
 def apply_moves(moves):
     #Moves each (source,destination) pair; returns [(source,destination,status),...] where status is
@@ -133,85 +103,214 @@ def remove_empty_directories(directories,junk_extensions=('nfo','txt','exe')):
             removed.append(directory)
     return removed
 
+def resolve_series(name,offline,year_arg):
+    #Looks the series up on TMDB and lets the user pick the right match (or, offline, takes the
+    #name/year directly from the caller); returns (name,year,tmdb_id). tmdb_id is None offline.
+    if not offline:
+        tmdb.API_KEY=os.environ['tvdb_api']
+        search=tmdb.Search()
+        search.tv(query=name)
+        if len(search.results)==0:
+            print('Series Not Found')
+            sys.exit('Program Quit')
+        for i,s in enumerate(search.results):
+            try:print(f"{i} |title: {s['name']}, aired: {s['first_air_date']}, overview:{s['overview']}")
+            except:print(f"{i} |title: {s['name']}, overview:{s['overview']}")
+        print('select entry # (or q to quit)')
+        selected=input()
+        try:result=search.results[int(selected)]
+        except:sys.exit('Program Quit')
+        return result['name'],result['first_air_date'][:4],result['id']
+    else:
+        year=year_arg
+        if year is None:
+            print('year (leave blank for no year)')
+            year=input().strip()
+        return name,year,None
 
-if on_line:
-    tmdb.API_KEY = os.environ['tvdb_api']
+def consolidate(parsed_show_name,destination_directory,destination_name,search_directories):
+    #Scans each directory in search_directories (and any of their matching subfolders, plus stray
+    #matching subfolders already sitting inside destination_directory) for files belonging to the
+    #show, moves+renames them into destination_directory, logs the changes, and removes any
+    #now-empty source folders left behind
+    planned_moves=[]
+    source_directories=[]
+    def add_subfolder_matches(parent_directory):
+        for subfolder_name,parsed_name in make_parsed_directory_dict(parent_directory).items():
+            if is_show_match(parsed_show_name,parsed_name) and name_parser(destination_name)!=parsed_name:
+                source_directory=os.path.join(parent_directory,subfolder_name)
+                planned_moves.extend(plan_moves(source_directory,parsed_show_name,destination_directory))
+                source_directories.append(source_directory)
 
-#Offline option?
-if on_line:
-    search = tmdb.Search()
-    #print(1)
-    response = search.tv(query=series_name)
-    #print(2)
-    if len(search.results)==0:
-        print('Series Not Found')
-        sys.exit("Program Quit")
-    #Maybe only run if multiple results? Start assuming the 0th?
-    for i,s in enumerate(search.results):
-        try:print(f"{i} |title: {s['name']}, aired: {s['first_air_date']}, overview:{s['overview']}")
-        except:print(f"{i} |title: {s['name']}, overview:{s['overview']}")
-    print('select entry # (or q to quit)')
-    series_selected=input()
-    try:
-        series_result=search.results[int(series_selected)]
-    except:sys.exit("Program Quit")
-    parsed_show_name=name_parser(series_result['name'])
-    series_year=series_result['first_air_date'][:4]
-    series_name_full=f"{series_result['name']} ({series_year})"
-else:
-    parsed_show_name=name_parser(series_name)
-    series_year=cli_args.year
-    if series_year is None:
-        print('year (leave blank for no year)')
-        series_year=input().strip()
-    series_name_full=f"{series_name} ({series_year})" if series_year else series_name
+    for search_directory in search_directories:
+        planned_moves+=plan_moves(search_directory,parsed_show_name,destination_directory)
+        add_subfolder_matches(search_directory)
+    add_subfolder_matches(destination_directory)
 
-series_name_full=series_name_full.replace(':','-')
-#print(parsed_show_name)
-#make
-#try:
+    print_plan(f'Planned moves into "{destination_name}"',planned_moves)
+    applied_moves=apply_moves(planned_moves)
+    log_entries(destination_directory,[
+        f'moved {source} -> {destination}' if status=='moved' else
+        f'copied {source} -> {destination} (original left behind -- could not remove it, possibly still in use)'
+        for source,destination,status in applied_moves])
+
+    removed_directories=remove_empty_directories(source_directories)
+    if removed_directories:print(f'\nRemoved now-empty source folder(s): {", ".join(removed_directories)}')
+
+    planned_renames=plan_renames(destination_directory,parsed_show_name,destination_name)
+    print_plan(f'Planned renames in "{destination_name}"',planned_renames)
+    applied_renames=apply_renames(destination_directory,planned_renames)
+    log_entries(destination_directory,[f'renamed {old_name} -> {new_name}' for old_name,new_name in applied_renames])
+
+
+class Series:
+    def __init__(self,name,year,tmdb_id,library):
+        self.name=name
+        self.year=year
+        self.tmdb_id=tmdb_id
+        self.library=library
+
+    @property
+    def full_name(self):
+        return full_show_name(self.name,self.year)
+
+    @property
+    def directory(self):
+        return os.path.join(self.library.root_directory,self.full_name)
+
+
+class Library:
+    CONFIG_FILE='.library_config.json'
+
+    def __init__(self,root_directory):
+        self.root_directory=os.path.abspath(root_directory)
+        self.scan_directories=[]
+        self.series=[]
+
+    @property
+    def config_path(self):
+        return os.path.join(self.root_directory,self.CONFIG_FILE)
+
+    @classmethod
+    def load(cls,root_directory):
+        #Loads the library's config from root_directory, or starts a fresh (unsaved) one if there isn't one yet
+        library=cls(root_directory)
+        if os.path.exists(library.config_path):
+            with open(library.config_path) as config_file:data=json.load(config_file)
+            library.scan_directories=data.get('scan_directories',[])
+            library.series=[Series(s['name'],s['year'],s.get('tmdb_id'),library) for s in data.get('series',[])]
+        return library
+
+    def save(self):
+        data={'scan_directories':self.scan_directories,
+              'series':[{'name':s.name,'year':s.year,'tmdb_id':s.tmdb_id} for s in self.series]}
+        with open(self.config_path,'w') as config_file:json.dump(data,config_file,indent=2)
+
+    def add_series(self,name,year,tmdb_id):
+        series=Series(name,year,tmdb_id,self)
+        if not os.path.isdir(series.directory):os.mkdir(series.directory)
+        self.series.append(series)
+        self.save()
+        return series
+
+    def add_scan_directory(self,directory):
+        directory=os.path.abspath(directory)
+        if directory not in self.scan_directories:
+            self.scan_directories.append(directory)
+            self.save()
+
+    def update_all(self):
+        #Scans every registered directory for matching episodes of every registered show and
+        #organizes them into the library -- skipping (and warning about) any scan directory
+        #that's gone missing, eg. an unmounted drive
+        scan_directories=[]
+        for directory in self.scan_directories:
+            if os.path.isdir(directory):scan_directories.append(directory)
+            else:print(f'(skipping scan directory that no longer exists: {directory})')
+        for series in self.series:
+            if not os.path.isdir(series.directory):os.mkdir(series.directory)
+            print(f'\n--- {series.full_name} ---')
+            consolidate(name_parser(series.name),series.directory,series.full_name,scan_directories)
+
+
+def run_library_command(argv):
+    library_parser=argparse.ArgumentParser(
+        prog='dir_cleaner.py library',
+        description='Manages a persistent library: register shows once, register the directories\n'
+                    'your torrent client downloads into, then run "update" to auto-organize new\n'
+                    'episodes into the library the same way the regular mode organizes one show.\n'
+                    '\n'
+                    'Run these from the library\'s root directory -- where your organized\n'
+                    '"Series Name (Year)" folders live (or should live); that\'s also where the\n'
+                    'library\'s config and log are kept.',
+        epilog='examples:\n'
+               '  python dir_cleaner.py library add The Office\n'
+               '  python dir_cleaner.py library add --offline --year 2005 The Office\n'
+               '  python dir_cleaner.py library scan /path/to/torrent/downloads\n'
+               '  python dir_cleaner.py library update',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    subparsers=library_parser.add_subparsers(dest='action')
+    subparsers.required=True  #add_subparsers(required=True) raises TypeError on Python 3.6 (bpo-29298)
+
+    add_parser=subparsers.add_parser('add',help='look up a series and register it in the library')
+    add_parser.add_argument('series_name',nargs='+',help='name of the TV series to add')
+    add_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
+    add_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
+
+    scan_parser=subparsers.add_parser('scan',help='register a directory to scan for new episodes (eg. a torrent download folder)')
+    scan_parser.add_argument('directory',help='path to the directory to scan on update')
+
+    subparsers.add_parser('update',help='scan all registered directories and organize matching episodes into the library')
+
+    args=library_parser.parse_args(argv)
+    library=Library.load('.')
+
+    if args.action=='add':
+        name,year,tmdb_id=resolve_series(' '.join(args.series_name),args.offline,args.year)
+        series=library.add_series(name,year,tmdb_id)
+        print(f'Added "{series.full_name}" to the library at {series.directory}')
+    elif args.action=='scan':
+        library.add_scan_directory(args.directory)
+        print(f'Now scanning for episodes in: {os.path.abspath(args.directory)}')
+    elif args.action=='update':
+        if not library.series:
+            print('No series registered yet -- add one with: python dir_cleaner.py library add <series name>')
+        else:
+            library.update_all()
+
+
+if len(sys.argv)>1 and sys.argv[1]=='library':
+    run_library_command(sys.argv[2:])
+    sys.exit()
+
+arg_parser=argparse.ArgumentParser(
+    description='Looks up a TV series, creates a "Series Name (Year)" folder in the current\n'
+                'directory, and moves/renames matching video files (mkv/mp4/avi/m4v) into it\n'
+                'as "Series Name (Year) sXXeXX.ext".\n'
+                '\n'
+                'Run it from the directory containing the show\'s files/folders -- it shows\n'
+                'the planned moves and renames before making them, then (in online mode)\n'
+                'prompts you to pick the matching series from TMDB search results.',
+    epilog='examples:\n'
+           '  python dir_cleaner.py The Office\n'
+           '  python dir_cleaner.py --offline The Office               (prompts for the year)\n'
+           '  python dir_cleaner.py --offline --year 2005 The Office\n'
+           '  python dir_cleaner.py --offline --year "" The Office     (no year in folder/file names)\n'
+           '\n'
+           'Online mode (the default) requires the tvdb_api environment variable to hold a TMDB API key.\n'
+           '\n'
+           'To manage a persistent library across multiple shows and download locations instead,\n'
+           'see: python dir_cleaner.py library --help',
+    formatter_class=argparse.RawDescriptionHelpFormatter)
+arg_parser.add_argument('series_name',nargs='+',help='name of the TV series to search for/organize')
+arg_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
+arg_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
+cli_args=arg_parser.parse_args()
+
+series_name=' '.join(cli_args.series_name)
+name,year,tmdb_id=resolve_series(series_name,cli_args.offline,cli_args.year)
+parsed_show_name=name_parser(name)
+series_name_full=full_show_name(name,year)
+
 if series_name_full not in make_parsed_directory_dict():os.mkdir(series_name_full)
-#except:pass
-#search for episodes in current folders
-
-parsed_directories_dict=make_parsed_directory_dict()
-
-planned_moves=[]
-source_directories=[]
-#search for loose episode files sitting directly in the top level (current) directory
-planned_moves+=plan_moves('.',parsed_show_name,series_name_full)
-#search for folders containing episodes. Note that this does not look for folders in folders, just file in folders
-for directory in parsed_directories_dict:
-    if (is_show_match(parsed_show_name,parsed_directories_dict[directory]) and
-        name_parser(series_name_full)!=parsed_directories_dict[directory]):
-        planned_moves+=plan_moves(directory,parsed_show_name,series_name_full)
-        source_directories.append(directory)
-#Look in
-parsed_directories_dict=make_parsed_directory_dict('./'+series_name_full)
-for directory in parsed_directories_dict:
-    if (is_show_match(parsed_show_name,parsed_directories_dict[directory]) and
-        parsed_show_name!=parsed_directories_dict[directory]):
-        source_directory='./'+series_name_full+'/'+directory
-        planned_moves+=plan_moves(source_directory,parsed_show_name,series_name_full)
-        source_directories.append(source_directory)
-
-print_plan(f'Planned moves into "{series_name_full}"',planned_moves)
-applied_moves=apply_moves(planned_moves)
-log_entries('./'+series_name_full,[
-    f'moved {source} -> {destination}' if status=='moved' else
-    f'copied {source} -> {destination} (original left behind -- could not remove it, possibly still in use)'
-    for source,destination,status in applied_moves])
-
-removed_directories=remove_empty_directories(source_directories)
-if removed_directories:print(f'\nRemoved now-empty source folder(s): {", ".join(removed_directories)}')
-
-#clean names
-planned_renames=plan_renames('./'+series_name_full,parsed_show_name,series_name_full)
-print_plan(f'Planned renames in "{series_name_full}"',planned_renames)
-applied_renames=apply_renames('./'+series_name_full,planned_renames)
-log_entries('./'+series_name_full,[f'renamed {old_name} -> {new_name}' for old_name,new_name in applied_renames])
-
-
-
-class TV_Series():
-    pass
+consolidate(parsed_show_name,series_name_full,series_name_full,['.'])

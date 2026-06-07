@@ -52,6 +52,40 @@ and file names altogether.
 
 Run `python dir_cleaner.py --help` for the full option reference and examples.
 
+## Library mode
+
+For an ongoing setup -- a fixed folder of organized shows, fed by one or more
+download locations -- you can register everything once and let the script
+auto-organize new episodes on a schedule (eg. a cron job/scheduled task) or
+whenever you remember to run it:
+
+```
+python dir_cleaner.py library add <series name> [--offline] [--year <year>]
+python dir_cleaner.py library scan <directory>
+python dir_cleaner.py library update
+```
+
+Run these from your library's root directory -- the folder where your
+organized `Series Name (Year)` folders live (or should live). That's where
+the library keeps its hidden `.library_config.json` (the registered shows and
+scan directories) alongside the per-show logs.
+
+- `add` looks the series up on TMDB (or, with `--offline`, takes the name/year
+  directly, just like single-show mode) and registers it, creating its
+  `Series Name (Year)` folder if it doesn't exist yet.
+- `scan` registers a directory to search for new episodes -- typically wherever
+  your torrent client downloads to. Run it once per location; you can register
+  more than one.
+- `update` scans every registered directory for matching episodes of every
+  registered show and organizes them into the library -- using the exact same
+  matching, moving, renaming, logging, copy-fallback, and empty-folder cleanup
+  behavior as single-show mode, just repeated across shows and directories. A
+  scan directory that's gone missing (eg. an unmounted drive) is skipped with
+  a warning rather than failing the whole run.
+
+Run `python dir_cleaner.py library --help` (or `library <command> --help`) for
+the full reference and examples.
+
 ## Logging and cleanup
 
 Every move and rename is appended, with a timestamp, to a hidden
