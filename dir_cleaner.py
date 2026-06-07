@@ -6,8 +6,23 @@ from shutil import move
 import tmdbsimple as tmdb
 import re
 
-arg_parser=argparse.ArgumentParser()
-arg_parser.add_argument('series_name',nargs='+',help='name of the TV series')
+arg_parser=argparse.ArgumentParser(
+    description='Looks up a TV series, creates a "Series Name (Year)" folder in the current\n'
+                'directory, and moves/renames matching video files (mkv/mp4/avi/m4v) into it\n'
+                'as "Series Name (Year) sXXeXX.ext".\n'
+                '\n'
+                'Run it from the directory containing the show\'s files/folders -- it shows\n'
+                'the planned moves and renames before making them, then (in online mode)\n'
+                'prompts you to pick the matching series from TMDB search results.',
+    epilog='examples:\n'
+           '  python dir_cleaner.py The Office\n'
+           '  python dir_cleaner.py --offline The Office               (prompts for the year)\n'
+           '  python dir_cleaner.py --offline --year 2005 The Office\n'
+           '  python dir_cleaner.py --offline --year "" The Office     (no year in folder/file names)\n'
+           '\n'
+           'Online mode (the default) requires the tvdb_api environment variable to hold a TMDB API key.',
+    formatter_class=argparse.RawDescriptionHelpFormatter)
+arg_parser.add_argument('series_name',nargs='+',help='name of the TV series to search for/organize')
 arg_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
 arg_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
 cli_args=arg_parser.parse_args()
