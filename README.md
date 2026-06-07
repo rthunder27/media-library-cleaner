@@ -52,12 +52,22 @@ and file names altogether.
 
 Run `python dir_cleaner.py --help` for the full option reference and examples.
 
+## Logging and cleanup
+
+Every move and rename is appended, with a timestamp, to a hidden
+`.cleaner_log.txt` file inside the destination `Series Name (Year)` folder --
+a running record of what the script has done.
+
+After moving videos out, any source folder left containing nothing but junk
+(`.nfo`, `.txt`, `.exe` files, or nothing at all) is removed automatically.
+Folders with anything else left in them (subtitles, nested folders, etc.) are
+left alone.
+
 ## Known limitations
 
 - Title-subset collisions aren't handled (e.g. "Angel" matching "Touched by an
   Angel").
 - Files missing an `sNNeNN` episode tag (or containing two of them) won't be
   renamed.
-- No changelog/undo mechanism for moves and renames yet.
-- Empty leftover folders (e.g. ones containing only `.nfo`/`.txt` files) aren't
-  cleaned up after their videos are moved out.
+- The log records what changed, but there's no command to replay it as an
+  undo yet.

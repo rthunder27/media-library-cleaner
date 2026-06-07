@@ -5,6 +5,7 @@ import argparse
 from shutil import move
 import tmdbsimple as tmdb
 import re
+from datetime import datetime
 
 arg_parser=argparse.ArgumentParser(
     description='Looks up a TV series, creates a "Series Name (Year)" folder in the current\n'
@@ -31,10 +32,7 @@ series_name=' '.join(cli_args.series_name)
 on_line=not cli_args.offline
 
 #todo- Clean up code, duh
-#Make OOP, maybe extend to a "library" level, so can autoupdate all? 
-# Maybe create logs of changes made, for the ability to undo. (also a list of all source directories would help
-# with the next idea)
-#Remove (relatively) empty folders after moving the videos out. (directories containing only .nfo, .txt,.exe?)
+#Make OOP, maybe extend to a "library" level, so can autoupdate all?
 
 #Open Issues
 # the title subset problem, when one title exists in another (Angel vs Touched by an Angel)
@@ -83,17 +81,37 @@ def plan_renames(directory,parsed_show_name,series_name_full):
             if file!=new_file_name:renames.append((file,new_file_name))
     return renames
 def apply_renames(directory,renames):
+    #Renames files, returning the (old_name,new_name) pairs that actually succeeded
+    successful=[]
     for old_name,new_name in renames:
         try:
             os.rename(os.path.join(directory,old_name),os.path.join(directory,new_name))
             print(new_name)
+            successful.append((old_name,new_name))
         except:print(f'failed to rename {old_name}')
+    return successful
 def print_plan(title,items):
     print(f'\n{title}:')
     if items:
         for source,destination in items:print(f'  {source}  ->  {destination}')
     else:print('  (nothing to do)')
-            
+def log_entries(directory,entries):
+    #Appends timestamped entries to a hidden log file in directory, as a record of changes made (and a basis for a future undo command)
+    if not entries:return
+    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(os.path.join(directory,'.cleaner_log.txt'),'a') as log_file:
+        for entry in entries:log_file.write(f'{timestamp}  {entry}\n')
+def remove_empty_directories(directories,junk_extensions=('nfo','txt','exe')):
+    #Removes any directory left containing nothing but junk files (eg. leftover .nfo/.txt/.exe) once its videos have moved out
+    removed=[]
+    for directory in directories:
+        entries=list(os.scandir(directory))
+        if all(entry.is_file() and entry.name.rsplit('.',1)[-1].lower() in junk_extensions for entry in entries):
+            for entry in entries:os.remove(entry.path)
+            os.rmdir(directory)
+            removed.append(directory)
+    return removed
+
 
 if on_line:
     tmdb.API_KEY = os.environ['tvdb_api']
@@ -138,25 +156,36 @@ if series_name_full not in make_parsed_directory_dict():os.mkdir(series_name_ful
 parsed_directories_dict=make_parsed_directory_dict()
 
 planned_moves=[]
+source_directories=[]
 #search for loose episode files sitting directly in the top level (current) directory
 planned_moves+=plan_moves('.',parsed_show_name,series_name_full)
 #search for folders containing episodes. Note that this does not look for folders in folders, just file in folders
 for directory in parsed_directories_dict:
     if (parsed_show_name in parsed_directories_dict[directory] and
-        name_parser(series_name_full)!=parsed_directories_dict[directory]):planned_moves+=plan_moves(directory,parsed_show_name,series_name_full)
+        name_parser(series_name_full)!=parsed_directories_dict[directory]):
+        planned_moves+=plan_moves(directory,parsed_show_name,series_name_full)
+        source_directories.append(directory)
 #Look in
 parsed_directories_dict=make_parsed_directory_dict('./'+series_name_full)
 for directory in parsed_directories_dict:
     if (parsed_show_name in parsed_directories_dict[directory] and
-        parsed_show_name!=parsed_directories_dict[directory]):planned_moves+=plan_moves('./'+series_name_full+'/'+directory,parsed_show_name,series_name_full)
+        parsed_show_name!=parsed_directories_dict[directory]):
+        source_directory='./'+series_name_full+'/'+directory
+        planned_moves+=plan_moves(source_directory,parsed_show_name,series_name_full)
+        source_directories.append(source_directory)
 
 print_plan(f'Planned moves into "{series_name_full}"',planned_moves)
 apply_moves(planned_moves)
+log_entries('./'+series_name_full,[f'moved {source} -> {destination}' for source,destination in planned_moves])
+
+removed_directories=remove_empty_directories(source_directories)
+if removed_directories:print(f'\nRemoved now-empty source folder(s): {", ".join(removed_directories)}')
 
 #clean names
 planned_renames=plan_renames('./'+series_name_full,parsed_show_name,series_name_full)
 print_plan(f'Planned renames in "{series_name_full}"',planned_renames)
-apply_renames('./'+series_name_full,planned_renames)
+applied_renames=apply_renames('./'+series_name_full,planned_renames)
+log_entries('./'+series_name_full,[f'renamed {old_name} -> {new_name}' for old_name,new_name in applied_renames])
 
 
 
