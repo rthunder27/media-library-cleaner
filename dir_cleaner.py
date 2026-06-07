@@ -28,7 +28,8 @@ on_line=not cli_args.offline
 
 
 #Remove if uploading to github
-def name_parser(name):return replace_all(name.lower(),{"'":'',".":" ","-":' ',':':'',',':'','_':' '})
+#Strip any remaining special characters (eg. the "!" in "Reno 911!") since they're typically dropped from downloaded file/folder names
+def name_parser(name):return re.sub(r'[^a-z0-9 ]','',replace_all(name.lower(),{"'":'',".":" ","-":' ',':':'',',':'','_':' '}))
 def replace_all(text, dic):
     for i, j in dic.items():
         text = text.replace(i, j)
@@ -82,11 +83,6 @@ def print_plan(title,items):
 
 if on_line:
     tmdb.API_KEY = os.environ['tvdb_api']
-
-"""
-Reno 911 failed. Special character in official name, Reno 911!, but not in file name. 
-maybe remove special characters from the downloaded names?
-"""
 
 #Offline option?
 if on_line:
