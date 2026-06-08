@@ -52,10 +52,18 @@ a small dispatch block at the bottom either runs `run_library_command` (if
 
 1. **Name normalization** — `name_parser`/`replace_all` lowercase names and
    strip punctuation so directory/file names can be matched against the
-   canonical series name; `is_show_match` anchors that match to the start of
-   the candidate on a word boundary (see the in-code comment for the
-   title-subset trade-off this resolves, and a suggested `--loose-match`
-   alternative); `full_show_name` builds the canonical `"Name (Year)"` form.
+   canonical series name; `is_show_match(parsed_show_name, parsed_candidate_name, loose=False)`
+   anchors that match to the start of the candidate on a word boundary by
+   default (avoids title-subset false positives like "Angel" matching "Touched
+   by an Angel"), or — when `loose`/`--loose-match` is set — matches the show
+   name anywhere in the candidate (catches names with something prefixed, eg.
+   a release-group tag, at the cost of reintroducing the subset-match risk;
+   see the in-code comment). `loose` is threaded through `plan_moves`/
+   `plan_renames`/`consolidate`, set per-run via `--loose-match` in single-show
+   mode, and persisted per-series (`Series.loose_match`, applied automatically
+   on every `library update`) since it's fundamentally a property of how a
+   particular show's releases are usually named; `full_show_name` builds the
+   canonical `"Name (Year)"` form.
 2. **Directory scanning** — `make_parsed_file_dict`/`make_parsed_directory_dict`
    build `{original_name: parsed_name}` maps for video files
    (`mkv`/`mp4`/`avi`/`m4v`) and subdirectories of a given path.
@@ -93,6 +101,9 @@ unconditionally in `consolidate`.
   `plan_renames` will raise and `apply_renames` prints `failed to rename {file}`.
 - The log (`.cleaner_log.txt`, one per organized show folder) records what
   changed, but there's no command to replay it as an undo yet.
-- `is_show_match`'s anchored matching trades away names with something
-  prefixed before the title (eg. `[ReleaseGroup] Angel - S01E01.mkv`) to avoid
-  title-subset false positives — see the trade-off comment on `is_show_match`.
+- `is_show_match`'s default anchored matching trades away names with
+  something prefixed before the title (eg. `[ReleaseGroup] Angel - S01E01.mkv`)
+  to avoid title-subset false positives; `--loose-match` (per-run in
+  single-show mode, persisted per-series in library mode) is the escape
+  hatch, at the cost of reintroducing that subset-match risk — see the
+  trade-off comment on `is_show_match`.

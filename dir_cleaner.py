@@ -19,13 +19,15 @@ def full_show_name(name,year):
     #are replaced since they're not valid in Windows file/folder names
     full=f'{name} ({year})' if year else name
     return full.replace(':','-')
-def is_show_match(parsed_show_name,parsed_candidate_name):
-    #Anchors the match to the start of the candidate on a word boundary, eg. parsed_show_name "angel"
-    #matches "angel s01e01" but not "touched by an angel s01e01" -- fixing the title-subset false
-    #positive (Angel vs Touched by an Angel). Trade-off: this also misses names with something
-    #prefixed before the title, eg. "[release group] angel s01e01". An alternative "loose" mode
-    #could just do `parsed_show_name in parsed_candidate_name` to catch those prefixed cases, at
-    #the cost of reintroducing the subset false positives -- could be exposed as a --loose-match flag.
+def is_show_match(parsed_show_name,parsed_candidate_name,loose=False):
+    #Default: anchors the match to the start of the candidate on a word boundary, eg.
+    #parsed_show_name "angel" matches "angel s01e01" but not "touched by an angel s01e01" --
+    #avoiding the title-subset false positive (Angel vs Touched by an Angel). Trade-off: this
+    #also misses names with something prefixed before the title, eg. "[release group] angel s01e01".
+    #--loose-match flips to the opposite trade-off: `parsed_show_name in parsed_candidate_name`
+    #catches those prefixed cases, at the cost of reintroducing subset false positives -- useful
+    #for shows whose name isn't a likely subset of another title.
+    if loose:return parsed_show_name in parsed_candidate_name
     return parsed_candidate_name==parsed_show_name or parsed_candidate_name.startswith(parsed_show_name+' ')
 def make_parsed_file_dict(directory='.'):
     #Finds video files in directory, parses the file names
@@ -35,11 +37,11 @@ def make_parsed_file_dict(directory='.'):
 def make_parsed_directory_dict(directory='.'):
     directories=[x.name for x in os.scandir(directory) if x.is_dir()]
     return { x:name_parser(x) for x in directories}
-def plan_moves(directory,parsed_show_name,destination_directory):
+def plan_moves(directory,parsed_show_name,destination_directory,loose=False):
     #Returns [(source_path,destination_path),...] for video files that match the show and would move into destination_directory
     parsed_file_dict=make_parsed_file_dict(directory)
     return [(os.path.join(directory,file),os.path.join(destination_directory,file))
-            for file in parsed_file_dict if is_show_match(parsed_show_name,parsed_file_dict[file])]
+            for file in parsed_file_dict if is_show_match(parsed_show_name,parsed_file_dict[file],loose)]
 def apply_moves(moves):
     #Moves each (source,destination) pair; returns [(source,destination,status),...] where status is
     #'moved' or 'copied' (used when the source couldn't be removed, eg. a video still being seeded)
@@ -56,12 +58,12 @@ def apply_moves(moves):
             print(f'  could not remove "{source}" after copying it (it may still be in use) -- the original was left in place')
             results.append((source,destination,'copied'))
     return results
-def plan_renames(directory,parsed_show_name,series_name_full):
+def plan_renames(directory,parsed_show_name,series_name_full,loose=False):
     #Returns [(old_name,new_name),...] for video files in directory that would be renamed to the standard format
     parsed_file_dict=make_parsed_file_dict(directory)
     renames=[]
     for file in parsed_file_dict:
-        if is_show_match(parsed_show_name,parsed_file_dict[file]):
+        if is_show_match(parsed_show_name,parsed_file_dict[file],loose):
             #Need to handle when the year is after the show name (the convention used when there are multiple shows with the same name)
             try:se_string=re.findall('[s]\d\d[e]\d\d', parsed_file_dict[file])[0]
             except:
@@ -128,7 +130,7 @@ def resolve_series(name,offline,year_arg):
             year=input().strip()
         return name,year,None
 
-def consolidate(parsed_show_name,destination_directory,destination_name,search_directories):
+def consolidate(parsed_show_name,destination_directory,destination_name,search_directories,loose=False):
     #Scans each directory in search_directories (and any of their matching subfolders, plus stray
     #matching subfolders already sitting inside destination_directory) for files belonging to the
     #show, moves+renames them into destination_directory, logs the changes, and removes any
@@ -137,13 +139,13 @@ def consolidate(parsed_show_name,destination_directory,destination_name,search_d
     source_directories=[]
     def add_subfolder_matches(parent_directory):
         for subfolder_name,parsed_name in make_parsed_directory_dict(parent_directory).items():
-            if is_show_match(parsed_show_name,parsed_name) and name_parser(destination_name)!=parsed_name:
+            if is_show_match(parsed_show_name,parsed_name,loose) and name_parser(destination_name)!=parsed_name:
                 source_directory=os.path.join(parent_directory,subfolder_name)
-                planned_moves.extend(plan_moves(source_directory,parsed_show_name,destination_directory))
+                planned_moves.extend(plan_moves(source_directory,parsed_show_name,destination_directory,loose))
                 source_directories.append(source_directory)
 
     for search_directory in search_directories:
-        planned_moves+=plan_moves(search_directory,parsed_show_name,destination_directory)
+        planned_moves+=plan_moves(search_directory,parsed_show_name,destination_directory,loose)
         add_subfolder_matches(search_directory)
     add_subfolder_matches(destination_directory)
 
@@ -157,17 +159,18 @@ def consolidate(parsed_show_name,destination_directory,destination_name,search_d
     removed_directories=remove_empty_directories(source_directories)
     if removed_directories:print(f'\nRemoved now-empty source folder(s): {", ".join(removed_directories)}')
 
-    planned_renames=plan_renames(destination_directory,parsed_show_name,destination_name)
+    planned_renames=plan_renames(destination_directory,parsed_show_name,destination_name,loose)
     print_plan(f'Planned renames in "{destination_name}"',planned_renames)
     applied_renames=apply_renames(destination_directory,planned_renames)
     log_entries(destination_directory,[f'renamed {old_name} -> {new_name}' for old_name,new_name in applied_renames])
 
 
 class Series:
-    def __init__(self,name,year,tmdb_id,library):
+    def __init__(self,name,year,tmdb_id,loose_match,library):
         self.name=name
         self.year=year
         self.tmdb_id=tmdb_id
+        self.loose_match=loose_match
         self.library=library
 
     @property
@@ -198,16 +201,16 @@ class Library:
         if os.path.exists(library.config_path):
             with open(library.config_path) as config_file:data=json.load(config_file)
             library.scan_directories=data.get('scan_directories',[])
-            library.series=[Series(s['name'],s['year'],s.get('tmdb_id'),library) for s in data.get('series',[])]
+            library.series=[Series(s['name'],s['year'],s.get('tmdb_id'),s.get('loose_match',False),library) for s in data.get('series',[])]
         return library
 
     def save(self):
         data={'scan_directories':self.scan_directories,
-              'series':[{'name':s.name,'year':s.year,'tmdb_id':s.tmdb_id} for s in self.series]}
+              'series':[{'name':s.name,'year':s.year,'tmdb_id':s.tmdb_id,'loose_match':s.loose_match} for s in self.series]}
         with open(self.config_path,'w') as config_file:json.dump(data,config_file,indent=2)
 
-    def add_series(self,name,year,tmdb_id):
-        series=Series(name,year,tmdb_id,self)
+    def add_series(self,name,year,tmdb_id,loose_match=False):
+        series=Series(name,year,tmdb_id,loose_match,self)
         if not os.path.isdir(series.directory):os.mkdir(series.directory)
         self.series.append(series)
         self.save()
@@ -230,7 +233,7 @@ class Library:
         for series in self.series:
             if not os.path.isdir(series.directory):os.mkdir(series.directory)
             print(f'\n--- {series.full_name} ---')
-            consolidate(name_parser(series.name),series.directory,series.full_name,scan_directories)
+            consolidate(name_parser(series.name),series.directory,series.full_name,scan_directories,series.loose_match)
 
 
 def run_library_command(argv):
@@ -256,6 +259,7 @@ def run_library_command(argv):
     add_parser.add_argument('series_name',nargs='+',help='name of the TV series to add')
     add_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
     add_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
+    add_parser.add_argument('--loose-match',action='store_true',help='match any file/folder containing the show name rather than just ones starting with it -- catches names with something prefixed (eg. a release group tag), at the risk of subset false positives (eg. "Angel" matching "Touched by an Angel"); saved with the series and used on every future update')
 
     scan_parser=subparsers.add_parser('scan',help='register a directory to scan for new episodes (eg. a torrent download folder)')
     scan_parser.add_argument('directory',help='path to the directory to scan on update')
@@ -267,8 +271,9 @@ def run_library_command(argv):
 
     if args.action=='add':
         name,year,tmdb_id=resolve_series(' '.join(args.series_name),args.offline,args.year)
-        series=library.add_series(name,year,tmdb_id)
-        print(f'Added "{series.full_name}" to the library at {series.directory}')
+        series=library.add_series(name,year,tmdb_id,args.loose_match)
+        loose_note=' (loose matching enabled)' if series.loose_match else ''
+        print(f'Added "{series.full_name}" to the library at {series.directory}{loose_note}')
     elif args.action=='scan':
         library.add_scan_directory(args.directory)
         print(f'Now scanning for episodes in: {os.path.abspath(args.directory)}')
@@ -296,6 +301,7 @@ arg_parser=argparse.ArgumentParser(
            '  python dir_cleaner.py --offline The Office               (prompts for the year)\n'
            '  python dir_cleaner.py --offline --year 2005 The Office\n'
            '  python dir_cleaner.py --offline --year "" The Office     (no year in folder/file names)\n'
+           '  python dir_cleaner.py --loose-match The Office           (also matches "[Group] The Office - S01E01.mkv")\n'
            '\n'
            'Online mode (the default) requires the tvdb_api environment variable to hold a TMDB API key.\n'
            '\n'
@@ -305,6 +311,7 @@ arg_parser=argparse.ArgumentParser(
 arg_parser.add_argument('series_name',nargs='+',help='name of the TV series to search for/organize')
 arg_parser.add_argument('--offline',action='store_true',help='skip the TMDB lookup; enter the show name and year manually')
 arg_parser.add_argument('--year',help='year the series first aired (offline mode; prompted for if omitted, leave blank for no year)')
+arg_parser.add_argument('--loose-match',action='store_true',help='match any file/folder containing the show name rather than just ones starting with it -- catches names with something prefixed (eg. a release group tag), at the risk of subset false positives (eg. "Angel" matching "Touched by an Angel")')
 cli_args=arg_parser.parse_args()
 
 series_name=' '.join(cli_args.series_name)
@@ -313,4 +320,4 @@ parsed_show_name=name_parser(name)
 series_name_full=full_show_name(name,year)
 
 if series_name_full not in make_parsed_directory_dict():os.mkdir(series_name_full)
-consolidate(parsed_show_name,series_name_full,series_name_full,['.'])
+consolidate(parsed_show_name,series_name_full,series_name_full,['.'],cli_args.loose_match)

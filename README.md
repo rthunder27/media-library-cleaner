@@ -50,6 +50,20 @@ If `--year` isn't given in offline mode, you'll be prompted for one. Leave it
 blank to omit the year -- and the surrounding parentheses -- from the folder
 and file names altogether.
 
+### Loose matching
+
+By default, a file/folder only matches the show if its name starts with the
+show's name (on a word boundary) -- this avoids title-subset false positives
+like "Angel" matching "Touched by an Angel", at the cost of missing names with
+something prefixed before the title (eg. `[ReleaseGroup] My Show - S01E01.mkv`).
+Pass `--loose-match` to match the show's name anywhere in the candidate's name
+instead, catching those prefixed names at the risk of reintroducing
+subset false positives:
+
+```
+python dir_cleaner.py --loose-match <series name>
+```
+
 Run `python dir_cleaner.py --help` for the full option reference and examples.
 
 ## Library mode
@@ -60,7 +74,7 @@ auto-organize new episodes on a schedule (eg. a cron job/scheduled task) or
 whenever you remember to run it:
 
 ```
-python dir_cleaner.py library add <series name> [--offline] [--year <year>]
+python dir_cleaner.py library add <series name> [--offline] [--year <year>] [--loose-match]
 python dir_cleaner.py library scan <directory>
 python dir_cleaner.py library update
 ```
@@ -72,7 +86,9 @@ scan directories) alongside the per-show logs.
 
 - `add` looks the series up on TMDB (or, with `--offline`, takes the name/year
   directly, just like single-show mode) and registers it, creating its
-  `Series Name (Year)` folder if it doesn't exist yet.
+  `Series Name (Year)` folder if it doesn't exist yet. Add `--loose-match` to
+  enable [loose matching](#loose-matching) for this show -- the setting is
+  saved with the series and applied automatically on every future `update`.
 - `scan` registers a directory to search for new episodes -- typically wherever
   your torrent client downloads to. Run it once per location; you can register
   more than one.
@@ -110,9 +126,12 @@ left alone.
   "Library" can't be looked up in single-show mode, since the script will try
   to treat it as a library subcommand instead.
 - Matching is anchored to the start of the file/folder name (on a word
-  boundary) to avoid title-subset false positives like "Angel" matching
-  "Touched by an Angel". The trade-off: names with something prefixed before
-  the title (e.g. `[ReleaseGroup] Angel - S01E01.mkv`) won't match either.
+  boundary) by default, to avoid title-subset false positives like "Angel"
+  matching "Touched by an Angel" -- which means names with something prefixed
+  before the title (e.g. `[ReleaseGroup] Angel - S01E01.mkv`) won't match.
+  [`--loose-match`](#loose-matching) is the escape hatch for the latter, at
+  the cost of reintroducing the former risk -- so it's best reserved for shows
+  whose names aren't a substring of some other show's name.
 - Files missing an `sNNeNN` episode tag (or containing two of them) won't be
   renamed.
 - The log records what changed, but there's no command to replay it as an
