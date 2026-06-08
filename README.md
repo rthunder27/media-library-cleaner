@@ -105,6 +105,10 @@ left alone.
 
 ## Known limitations
 
+- `library` is a reserved first argument that switches to library mode (like
+  `git`/`docker`/`npm` subcommands) -- a series whose name starts with
+  "Library" can't be looked up in single-show mode, since the script will try
+  to treat it as a library subcommand instead.
 - Matching is anchored to the start of the file/folder name (on a word
   boundary) to avoid title-subset false positives like "Angel" matching
   "Touched by an Angel". The trade-off: names with something prefixed before
